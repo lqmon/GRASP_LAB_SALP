@@ -1,0 +1,47 @@
+# Test Minimal SALP Configuration
+# This config removes slow features to focus on core issues
+
+environment:
+  name: salp_snake
+  type: salp_snake
+  width: 400  # Smaller environment = faster physics 
+  height: 300
+  params:
+    num_food_items: 1  # Single food item to simplify
+    food_reward: 10.0
+    collision_penalty: -5.0  # Reduced to not terminate so harshly
+    time_penalty: -0.01  # Minimal time penalty to see other signals
+    efficiency_bonus: 0.0  # Disable for now
+    forced_breathing: true
+    respawn_food: true
+    max_steps_without_food: 10000  # Much longer to allow exploration
+
+agent:
+  name: sac_salp
+  type: sac
+  hidden_sizes: [128, 128]  # Smaller network for faster training
+  activation: relu
+  learning_rate: 0.001
+  batch_size: 64
+  buffer_size: 100000  # Smaller buffer
+  gamma: 0.99
+  tau: 0.005
+  params:
+    alpha: 0.1
+    target_entropy: -1.0
+    alpha_lr: 0.0003
+
+training:
+  max_episodes: 100  # Short test run
+  max_steps_per_episode: 250  # Manageable step count for physics simulation
+  eval_frequency:  25
+  save_frequency: 50
+  start_training_after: 50
+  train_frequency: 1
+  target_update_frequency: 1
+  log_dir: data/logs
+  model_dir: data/models
+  experiment_name: test_minimal
+
+gail:
+  use_gail: false

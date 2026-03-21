@@ -1,7 +1,7 @@
 # test_robot.py
 from stable_baselines3 import SAC
 from salp_robot_env import SalpRobotEnv
-from robot import Robot, Nozzle
+from salp.environments.robot import Robot, Nozzle
 
 nozzle = Nozzle(length1=0.05, length2=0.05, length3=0.05, area=0.00016, mass=1.0)
 robot = Robot(dry_mass=1.0, init_length=0.3, init_width=0.15, 

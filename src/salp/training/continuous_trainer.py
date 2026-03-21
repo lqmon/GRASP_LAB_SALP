@@ -12,10 +12,10 @@ import threading
 import queue
 from concurrent.futures import ThreadPoolExecutor
 
-from config.base_config import ExperimentConfig
-from core.base_agent import BaseAgent, ReplayBuffer, Logger
-from agents.sac_agent import SACAgent
-from environments.salp_snake_env import SalpSnakeEnv
+from salp.config.base_config import ExperimentConfig
+from salp.core.base_agent import BaseAgent, ReplayBuffer, Logger
+from salp.agents.sac_agent import SACAgent
+from salp.environments.salp_snake_env import SalpSnakeEnv
 
 
 class ContinuousTrainer:
@@ -190,6 +190,8 @@ class ContinuousTrainer:
         
         except Exception as e:
             print(f"Training error: {e}")
+            import traceback
+            traceback.print_exc()
         
         finally:
             # Stop visual loop

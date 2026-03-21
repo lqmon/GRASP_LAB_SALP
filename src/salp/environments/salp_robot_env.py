@@ -14,7 +14,7 @@ import matplotlib.pyplot as plt
 from PIL import Image
 import os
 from datetime import datetime
-from robot import Robot, Nozzle
+from salp.environments.robot import Robot, Nozzle
 
 class SalpRobotEnv(gym.Env):
     """
@@ -44,6 +44,10 @@ class SalpRobotEnv(gym.Env):
         self.clock = None
         
         # # Robot state
+        # Create default robot if none provided
+        if robot is None:
+            nozzle = Nozzle(length1=0.05, length2=0.05, length3=0.05, area=0.00016, mass=1.0)
+            robot = Robot(dry_mass=1.0, init_length=0.3, init_width=0.15, max_contraction=0.06, nozzle=nozzle)
         self.robot = robot
         self.action = np.array([0.0, 0.0, 0.0])  # Current action
         
@@ -63,10 +67,19 @@ class SalpRobotEnv(gym.Env):
         vel_x_limits = [-np.inf, np.inf]
         vel_y_limits = [-np.inf, np.inf]
         yaw_limits = [-np.inf, np.inf]
-        angular_vel_limits = [-np.inf, np.inf] 
+        angular_vel_limits = [-np.inf, np.inf]
+        body_length_limits = [0.5, 2.0]
+        breathing_phase_limits = [0, 3]
+        water_volume_limits = [0, 1]
+        nozzle_angle_limits = [-1, 1]
+        
         self.observation_space = spaces.Box(
-            low=np.array([pos_x_limits[0], pos_y_limits[0], vel_x_limits[0], vel_y_limits[0], yaw_limits[0], angular_vel_limits[0]]),
-            high=np.array([pos_x_limits[1], pos_y_limits[1], vel_x_limits[1], vel_y_limits[1], yaw_limits[1], angular_vel_limits[1]]),
+            low=np.array([pos_x_limits[0], pos_y_limits[0], vel_x_limits[0], vel_y_limits[0], 
+                         yaw_limits[0], angular_vel_limits[0], body_length_limits[0], 
+                         breathing_phase_limits[0], water_volume_limits[0], nozzle_angle_limits[0]]),
+            high=np.array([pos_x_limits[1], pos_y_limits[1], vel_x_limits[1], vel_y_limits[1], 
+                          yaw_limits[1], angular_vel_limits[1], body_length_limits[1],
+                          breathing_phase_limits[1], water_volume_limits[1], nozzle_angle_limits[1]]),
             dtype=np.float32
         )
         # Movement history for the current action/breathing cycle (robot-frame meters)
@@ -107,6 +120,8 @@ class SalpRobotEnv(gym.Env):
         # Reset robot to center
         self.robot.reset()
         self.pos_init = np.array([self.width / 2, self.height / 2])
+        self.robot_pos = self.robot.position[0:2]  # Initialize robot 2D position
+        self.robot_angle = self.robot.euler_angle[2]  # Initialize robot yaw angle
         self.prev_dist = np.linalg.norm(self.robot.position[0:-1] - self.target_point)
         self.prev_action = np.array([0.0, 0.0, 0.0])
        
@@ -145,6 +160,13 @@ class SalpRobotEnv(gym.Env):
         self.robot.nozzle.solve_angles()
         self.robot.set_control(rescaled_action[0], rescaled_action[1], np.array([self.robot.nozzle.angle1, self.robot.nozzle.angle2]))  # contraction, coast_time, nozzle angle
         self.robot.step_through_cycle()
+        
+        # UPDATE robot position and angle after stepping
+        # CRITICAL: These must be updated every step for collision detection to work
+        self.robot_pos = self.robot.position[0:2]  # Update robot 2D position (in meters)
+        self.robot_angle = self.robot.euler_angle[2]  # Update robot yaw angle
+        self.ellipse_a = self.robot.get_current_length()  # Update body dimensions
+        self.ellipse_b = self.robot.get_current_width()
 
         # store the most recent breathing-cycle histories (meters)
         if self.render_mode == "human":
@@ -184,8 +206,9 @@ class SalpRobotEnv(gym.Env):
             reward -= 5.0  # penalty for going out of bounds
 
         # reset after a certain number of steps
-        if self.robot.cycle >= 500:
-            truncated = True
+        # NOTE: Removed hardcoded 500 step limit - let subclass control episode length
+        # if self.robot.cycle >= 500:
+        #     truncated = True
         
         observation = self._get_observation()
         # print(f"Obs: {observation}")
@@ -399,24 +422,31 @@ class SalpRobotEnv(gym.Env):
     
     def _get_observation(self) -> np.ndarray:
         """Get current observation."""
-        # Map breathing phase to number
+        # Map breathing phase to number: 0=Rest, 1=Refill, 2=Jet, 3=Coast
+        breathing_phase = self.robot.state.value if hasattr(self.robot.state, 'value') else 0
         
-        # print( np.array([
-        #     self.robot.position[0] - self.target_point[0],  # Normalized position
-        #     self.robot.position[1] - self.target_point[1],
-        #     self.robot.velocity[0],  # Normalized velocity
-        #     self.robot.velocity[1],
-        #     self.robot.euler_angle[2],  # Normalized body angle
-        #     self.robot.angular_velocity[2],  # Normalized angular velocity
-        # ], dtype=np.float32))
+        # Get body dimensions normalized
+        body_length = self.robot.get_current_length() / self.robot.init_length
+        
+        # Get water volume normalized (0 to 1)
+        # Estimate max water volume as the volume when fully expanded
+        max_volume = (self.robot.init_length * self.robot.init_width * self.robot.init_width) * 0.5
+        water_volume_norm = min(self.robot.volume / max_volume, 1.0) if max_volume > 0 else 0
+        
+        # Get nozzle angle
+        nozzle_angle = self.robot.nozzle.yaw / (np.pi / 2) if hasattr(self.robot.nozzle, 'yaw') else 0
 
         return np.array([
-            self.robot.position[0] - self.target_point[0],  # Normalized position
-            self.robot.position[1] - self.target_point[1],
-            self.robot.velocity[0],  # Normalized velocity
-            self.robot.velocity[1],
-            self.robot.euler_angle[2],  # Normalized body angle
-            self.robot.angular_velocity[2],  # Normalized angular velocity
+            self.robot.position[0] - self.target_point[0],  # Position X
+            self.robot.position[1] - self.target_point[1],  # Position Y
+            self.robot.velocity[0],  # Velocity X
+            self.robot.velocity[1],  # Velocity Y
+            self.robot.euler_angle[2],  # Body angle (yaw)
+            self.robot.angular_velocity[2],  # Angular velocity
+            body_length,  # Body size (normalized length)
+            breathing_phase,  # Breathing phase (0-3)
+            water_volume_norm,  # Water volume (normalized 0-1)
+            nozzle_angle,  # Nozzle angle (normalized)
         ], dtype=np.float32)
     
     def _get_info(self) -> Dict:

@@ -16,7 +16,7 @@ import pygame
 # sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'src'))
 
 from salp_robot_env import SalpRobotEnv
-from robot import Robot, Nozzle
+from salp.environments.robot import Robot, Nozzle
 
 
 def main():

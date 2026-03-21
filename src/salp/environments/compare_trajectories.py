@@ -13,7 +13,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.patches import FancyArrow
 
-from robot import Robot, Nozzle
+from salp.environments.robot import Robot, Nozzle
 
 
 def compare_actions_with_states(actions, expected_states, robot=None, verbose=True):

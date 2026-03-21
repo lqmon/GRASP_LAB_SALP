@@ -1,0 +1,37 @@
+# Fast Training Config for Testing
+# Shorter episodes but fast training with SB3
+
+environment:
+  name: salp_snake
+  type: salp_snake
+  width: 400  # Smaller tank = closer food
+  height: 400
+  params:
+    num_food_items: 3  # Less food to find
+    food_reward: 10.0
+    collision_penalty: -30.0
+    time_penalty: -0.05
+    efficiency_bonus: 0.5
+    forced_breathing: true
+    max_steps_without_food: 2000  # Long episodes for slow robot
+
+agent:
+  name: sac_salp
+  type: sac
+  hidden_sizes: [128, 128]  # Smaller network = faster training
+  activation: relu
+  learning_rate: 0.0003
+  batch_size: 64
+  buffer_size: 100000
+  gamma: 0.99
+  tau: 0.005
+
+training:
+  max_episodes: 1000
+  max_steps_per_episode: 2000
+  eval_frequency: 10
+  save_frequency: 50
+  start_training_after: 100
+  log_dir: data/logs
+  model_dir: data/models
+  experiment_name: salp_fast_test

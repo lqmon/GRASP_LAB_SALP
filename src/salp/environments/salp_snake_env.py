@@ -53,6 +53,10 @@ class SalpSnakeEnv(SalpRobotEnv):
         self.food_radius = 15
         self.min_food_distance = 80  # Minimum distance between food items
         
+        # CRITICAL FIX: Unit conversion scale (pixels per meter)
+        # The robot physics operates in meters, but the environment (width/height/margin) is in pixels
+        self.pixel_scale = 20.0  # pixels per meter
+        
         # Game state
         self.score = 0
         self.food_collected = 0
@@ -154,6 +158,20 @@ class SalpSnakeEnv(SalpRobotEnv):
         extended_obs = self._get_extended_observation()
         return extended_obs, info
     
+    def _rescale_action(self, action: np.ndarray) -> np.ndarray:
+        """Rescale action based on forced breathing mode."""
+        if self.forced_breathing:
+            # Single action: nozzle direction only
+            # Breathing happens automatically with constant contraction
+            # rescaled = [inhale_control, coast_time, nozzle_yaw]
+            rescaled = np.array([0.03, 0.5, action[0] * (np.pi / 2)])
+            return rescaled
+        else:
+            # Two actions: [inhale_control, nozzle_yaw]
+            # Expand to: [inhale_control, coast_time, nozzle_yaw]
+            expanded_action = np.array([action[0], 0.5, action[1]])
+            return super()._rescale_action(expanded_action)
+    
     def step(self, action: np.ndarray) -> Tuple[np.ndarray, float, bool, bool, Dict]:
         """Step the environment forward."""
         # Step parent environment
@@ -178,6 +196,8 @@ class SalpSnakeEnv(SalpRobotEnv):
             # Only respawn if respawn_food is enabled
             if self.respawn_food:
                 self._respawn_food()
+                # DEBUG: Log food respawn
+                # print(f"[DEBUG] Food collected! New positions: {self.food_positions}")
         
         # Check termination conditions
         if collision:
@@ -202,14 +222,22 @@ class SalpSnakeEnv(SalpRobotEnv):
         return extended_obs, reward, done, truncated, info
     
     def _check_food_collection(self) -> bool:
-        """Check if robot has collected any food."""
-        robot_pos = self.robot_pos
-        robot_radius = max(self.ellipse_a, self.ellipse_b)
+        """Check if robot has collected any food.
+        
+        CRITICAL: robot_pos is in meters, food_positions are in pixels.
+        Must convert robot position to screen coordinates.
+        """
+        # Convert robot position to screen pixels (compensating for pos_init offset)
+        robot_pos_pixels = np.array([
+            self.pos_init[0] + self.robot_pos[0] * self.pixel_scale,
+            self.pos_init[1] + self.robot_pos[1] * self.pixel_scale
+        ])
+        robot_radius = max(self.ellipse_a, self.ellipse_b) * self.pixel_scale
         
         for i, food_pos in enumerate(self.food_positions):
             if food_pos is not None:  # Food exists
-                distance = math.sqrt((robot_pos[0] - food_pos[0])**2 + 
-                                   (robot_pos[1] - food_pos[1])**2)
+                distance = math.sqrt((robot_pos_pixels[0] - food_pos[0])**2 + 
+                                   (robot_pos_pixels[1] - food_pos[1])**2)
                 if distance < (robot_radius + self.food_radius):
                     # Mark food as collected
                     self.food_positions[i] = None
@@ -217,15 +245,30 @@ class SalpSnakeEnv(SalpRobotEnv):
         return False
     
     def _check_wall_collision(self) -> bool:
-        """Check if robot has collided with walls."""
-        robot_radius = max(self.ellipse_a, self.ellipse_b)
+        """Check if robot has collided with walls.
+        
+        CRITICAL: Coordinate conversion:
+        - robot_pos is in meters (robot's local frame)
+        - Need to add pos_init offset and convert to pixels
+        - pos_init is the tank center in pixels
+        """
+        # Convert robot position to screen pixels
+        # robot_pos (meters) -> * pixel_scale -> (pixels in robot frame)
+        # Then add pos_init to get screen coordinates
+        robot_pos_pixels = np.array([
+            self.pos_init[0] + self.robot_pos[0] * self.pixel_scale,
+            self.pos_init[1] + self.robot_pos[1] * self.pixel_scale
+        ])
+        
+        # Robot radius in pixels (convert from meters)
+        robot_radius = max(self.ellipse_a, self.ellipse_b) * self.pixel_scale
         margin = self.tank_margin
         
-        # Check boundaries
-        if (self.robot_pos[0] - robot_radius <= margin or 
-            self.robot_pos[0] + robot_radius >= self.width - margin or
-            self.robot_pos[1] - robot_radius <= margin or 
-            self.robot_pos[1] + robot_radius >= self.height - margin):
+        # Check boundaries using pixel coordinates
+        if (robot_pos_pixels[0] - robot_radius <= margin or 
+            robot_pos_pixels[0] + robot_radius >= self.width - margin or
+            robot_pos_pixels[1] - robot_radius <= margin or 
+            robot_pos_pixels[1] + robot_radius >= self.height - margin):
             return True
         return False
     
@@ -234,6 +277,12 @@ class SalpSnakeEnv(SalpRobotEnv):
         max_attempts = 50
         attempts = 0
         
+        # Convert robot position to pixels for distance comparison
+        robot_pos_pixels = np.array([
+            self.pos_init[0] + self.robot_pos[0] * self.pixel_scale,
+            self.pos_init[1] + self.robot_pos[1] * self.pixel_scale
+        ])
+        
         while attempts < max_attempts:
             # Generate random position
             x = random.uniform(self.tank_margin + self.food_radius, 
@@ -241,8 +290,8 @@ class SalpSnakeEnv(SalpRobotEnv):
             y = random.uniform(self.tank_margin + self.food_radius, 
                              self.height - self.tank_margin - self.food_radius)
             
-            # Check distance from robot
-            robot_distance = math.sqrt((x - self.robot_pos[0])**2 + (y - self.robot_pos[1])**2)
+            # Check distance from robot (both in pixels)
+            robot_distance = math.sqrt((x - robot_pos_pixels[0])**2 + (y - robot_pos_pixels[1])**2)
             if robot_distance < self.min_food_distance:
                 attempts += 1
                 continue
@@ -334,29 +383,42 @@ class SalpSnakeEnv(SalpRobotEnv):
         return True
     
     def _get_nearest_food_distance(self) -> Optional[float]:
-        """Get distance to nearest food item."""
+        """Get distance to nearest food item.
+        
+        CRITICAL: robot_pos is in meters, food_positions are in pixels.
+        """
         min_distance = None
-        robot_pos = self.robot_pos
+        robot_pos_pixels = np.array([
+            self.pos_init[0] + self.robot_pos[0] * self.pixel_scale,
+            self.pos_init[1] + self.robot_pos[1] * self.pixel_scale
+        ])
         
         for food_pos in self.food_positions:
             if food_pos is not None:
-                distance = math.sqrt((robot_pos[0] - food_pos[0])**2 + 
-                                   (robot_pos[1] - food_pos[1])**2)
+                distance = math.sqrt((robot_pos_pixels[0] - food_pos[0])**2 + 
+                                   (robot_pos_pixels[1] - food_pos[1])**2)
                 if min_distance is None or distance < min_distance:
                     min_distance = distance
         
         return min_distance
     
     def _get_nearest_food_position(self) -> Optional[List[float]]:
-        """Get position of nearest food item."""
+        """Get position of nearest food item.
+        
+        CRITICAL: robot_pos is in meters, food_positions are in pixels.
+        Returns food position in pixels for alignment calculation.
+        """
         min_distance = None
         nearest_food = None
-        robot_pos = self.robot_pos
+        robot_pos_pixels = np.array([
+            self.pos_init[0] + self.robot_pos[0] * self.pixel_scale,
+            self.pos_init[1] + self.robot_pos[1] * self.pixel_scale
+        ])
         
         for food_pos in self.food_positions:
             if food_pos is not None:
-                distance = math.sqrt((robot_pos[0] - food_pos[0])**2 + 
-                                   (robot_pos[1] - food_pos[1])**2)
+                distance = math.sqrt((robot_pos_pixels[0] - food_pos[0])**2 + 
+                                   (robot_pos_pixels[1] - food_pos[1])**2)
                 if min_distance is None or distance < min_distance:
                     min_distance = distance
                     nearest_food = food_pos
@@ -364,18 +426,26 @@ class SalpSnakeEnv(SalpRobotEnv):
         return nearest_food
     
     def _get_extended_observation(self) -> np.ndarray:
-        """Get extended observation with fixed-size food information for variable food counts."""
+        """Get extended observation with fixed-size food information for variable food counts.
+        
+        CRITICAL: robot_pos is in meters, food_positions are in pixels.
+        """
         # Get base observation
         base_obs = super()._get_observation()
         
+        # Convert robot to screen pixels for distance/relative position calculations
+        robot_pos_pixels = np.array([
+            self.pos_init[0] + self.robot_pos[0] * self.pixel_scale,
+            self.pos_init[1] + self.robot_pos[1] * self.pixel_scale
+        ])
+        
         # Get all valid food positions with distances
-        robot_pos = self.robot_pos
         food_with_distances = []
         
         for food_pos in self.food_positions:
             if food_pos is not None:
-                distance = math.sqrt((food_pos[0] - robot_pos[0])**2 + 
-                                   (food_pos[1] - robot_pos[1])**2)
+                distance = math.sqrt((food_pos[0] - robot_pos_pixels[0])**2 + 
+                                   (food_pos[1] - robot_pos_pixels[1])**2)
                 food_with_distances.append((food_pos, distance))
         
         # Sort by distance (nearest first)
@@ -389,15 +459,16 @@ class SalpSnakeEnv(SalpRobotEnv):
                 food_pos, distance = food_with_distances[i]
                 
                 # Relative position (normalized)
-                rel_x = (food_pos[0] - robot_pos[0]) / self.width
-                rel_y = (food_pos[1] - robot_pos[1]) / self.height
+                rel_x = (food_pos[0] - robot_pos_pixels[0]) / self.width
+                rel_y = (food_pos[1] - robot_pos_pixels[1]) / self.height
                 
                 # Distance (normalized)
                 norm_distance = distance / math.sqrt(self.width**2 + self.height**2)
                 
                 # Angle to food relative to robot orientation
-                angle_to_food = math.atan2(food_pos[1] - robot_pos[1], 
-                                         food_pos[0] - robot_pos[0])
+                # food_pos and robot_pos_pixels are both in pixels
+                angle_to_food = math.atan2(food_pos[1] - robot_pos_pixels[1], 
+                                         food_pos[0] - robot_pos_pixels[0])
                 relative_angle = angle_to_food - self.robot_angle
                 # Normalize angle to [-1, 1]
                 while relative_angle > math.pi:

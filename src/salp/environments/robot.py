@@ -32,6 +32,9 @@ class Nozzle:
         self.R_nm = None
         self.R_mb = None
         self.R_br = None
+        
+        # Initialize rotation matrices
+        self._get_rotation_matrices()
 
     def set_angles(self, angle1: float, angle2: float):
         """Set the nozzle angles.
